@@ -1,0 +1,61 @@
+Create a clean, modern SaaS dashboard mockup for a conference chat widget configuration platform. Use a sidebar navigation layout similar to Stripe or Vercel dashboards.
+Required Pages/Sections:
+1. Overview Dashboard
+
+Welcome message with setup progress (0/4 steps complete)
+Quick stats cards: Total messages this month, Active sessions, Response quality score, Token costs
+Recent activity feed showing latest chat interactions
+"Get Started" call-to-action if not fully configured
+
+2. Widget Configuration
+
+Brand Settings: Logo upload, primary color picker, widget name field, welcome message textarea
+Positioning: Toggle for bottom-left/bottom-right placement
+Features: Toggles for "Require login", "Enable feedback", "Show typing indicator"
+Live preview window showing how the widget will look
+Generate Widget Code button that reveals copy-pasteable script tag
+
+3. Knowledge Base
+
+File upload area (drag & drop) for PDFs and CSVs
+List of uploaded documents with status (Processing/Ready/Failed)
+Document preview/edit capabilities
+System Prompt textarea for customizing AI personality
+"Test Knowledge" button to ask sample questions
+
+4. Analytics Dashboard
+
+Time-range selector (Last 7 days, 30 days, 3 months)
+Usage Charts: Messages per day line chart, Peak hours heatmap
+Quality Metrics: Average response rating, Common feedback themes
+Cost Tracking: Token usage graph, Monthly spend vs budget, Cost per conversation
+Popular Questions list to identify content gaps
+
+5. Settings
+
+Account Settings: Conference name, contact info, billing details
+Team Management: Add/remove team members, role permissions
+API Keys: Regenerate webhook URLs, view integration status
+Billing: Current plan, usage limits, upgrade options
+
+Design Specifications:
+
+Clean, minimal interface with plenty of white space
+Modern color scheme (blues/grays) with customizable accent colors
+Include navigation breadcrumbs
+Use card-based layouts for each section
+Add helpful tooltips and empty states
+Show loading states and success/error messages
+Make it mobile-responsive friendly
+
+Key UI Elements to Include:
+
+Progress indicators for multi-step processes
+Copy-to-clipboard buttons for widget code
+Real-time preview components
+Data visualization charts (line, bar, donut charts)
+File upload with progress bars
+Toggle switches and form controls
+Search and filter capabilities for analytics
+
+Style Reference: Think Notion's clean interface meets Stripe's dashboard functionality - professional but approachable for non-technical conference organizers.
