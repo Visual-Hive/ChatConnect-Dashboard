@@ -4,12 +4,13 @@ import { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 
 interface FileUploadProps {
-  onFilesSelected: (files: File[]) => void;
+  onFilesSelected: (files: File[], tagIds: string[]) => void;
+  onFilesReadyForTagging?: (files: File[]) => void;
   accept?: string;
   maxFiles?: number;
 }
 
-export function FileUpload({ onFilesSelected, accept = ".pdf,.csv", maxFiles = 10 }: FileUploadProps) {
+export function FileUpload({ onFilesSelected, onFilesReadyForTagging, accept = ".pdf,.csv", maxFiles = 10 }: FileUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -27,17 +28,25 @@ export function FileUpload({ onFilesSelected, accept = ".pdf,.csv", maxFiles = 1
       e.preventDefault();
       setIsDragging(false);
       const files = Array.from(e.dataTransfer.files).slice(0, maxFiles);
-      onFilesSelected(files);
+      if (onFilesReadyForTagging) {
+        onFilesReadyForTagging(files);
+      } else {
+        onFilesSelected(files, []);
+      }
     },
-    [onFilesSelected, maxFiles]
+    [onFilesSelected, onFilesReadyForTagging, maxFiles]
   );
 
   const handleFileInput = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files ? Array.from(e.target.files).slice(0, maxFiles) : [];
-      onFilesSelected(files);
+      if (onFilesReadyForTagging) {
+        onFilesReadyForTagging(files);
+      } else {
+        onFilesSelected(files, []);
+      }
     },
-    [onFilesSelected, maxFiles]
+    [onFilesSelected, onFilesReadyForTagging, maxFiles]
   );
 
   return (
