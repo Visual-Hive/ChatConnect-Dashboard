@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,11 +11,14 @@ import { WidgetPreview } from "@/components/widget-preview";
 import { CodeBlock } from "@/components/code-block";
 import { Upload, Code } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 
 export default function WidgetConfig() {
   const { toast } = useToast();
-  const [widgetName, setWidgetName] = useState("Conference Support");
-  const [welcomeMessage, setWelcomeMessage] = useState("Hi! How can I help you today?");
+  const { client } = useAuth();
+  const queryClient = useQueryClient();
+  const [widgetName, setWidgetName] = useState("Support");
+  const [welcomeMessage, setWelcomeMessage] = useState("Hi! How can I help?");
   const [primaryColor, setPrimaryColor] = useState("#3b82f6");
   const [position, setPosition] = useState<"bottom-left" | "bottom-right">("bottom-right");
   const [requireLogin, setRequireLogin] = useState(false);
@@ -22,21 +26,76 @@ export default function WidgetConfig() {
   const [showTyping, setShowTyping] = useState(true);
   const [showCode, setShowCode] = useState(false);
 
+  // Fetch widget configuration
+  const { data: widgetConfig, isLoading } = useQuery({
+    queryKey: ["widget", client?.id],
+    queryFn: async () => {
+      const response = await fetch(`/api/dashboard/widget/${client?.id}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch widget config");
+      return response.json();
+    },
+    enabled: !!client?.id,
+  });
+
+  // Update local state when config loads
+  useEffect(() => {
+    if (widgetConfig) {
+      setWidgetName(widgetConfig.widgetName || "Support");
+      setWelcomeMessage(widgetConfig.welcomeMessage || "Hi! How can I help?");
+      setPrimaryColor(widgetConfig.primaryColor || "#3b82f6");
+      setPosition(widgetConfig.position || "bottom-right");
+    }
+  }, [widgetConfig]);
+
+  // Mutation to save widget configuration
+  const saveConfigMutation = useMutation({
+    mutationFn: async (config: {
+      widgetName: string;
+      welcomeMessage: string;
+      primaryColor: string;
+      position: "bottom-left" | "bottom-right";
+    }) => {
+      const response = await fetch(`/api/dashboard/widget/${client?.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(config),
+      });
+      if (!response.ok) throw new Error("Failed to save widget config");
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["widget", client?.id] });
+      toast({
+        title: "Settings saved",
+        description: "Your widget configuration has been updated.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to save widget configuration.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const widgetCode = `<script>
-  (function() {
-    var script = document.createElement('script');
-    script.src = 'https://widget.conferenceapp.com/widget.js';
-    script.setAttribute('data-widget-id', 'conf_2024_abc123');
-    script.setAttribute('data-color', '${primaryColor}');
-    script.setAttribute('data-position', '${position}');
-    document.body.appendChild(script);
-  })();
-</script>`;
+  window.ConferenceChatConfig = {
+    apiKey: '${client?.publicApiKey || 'YOUR_API_KEY'}',
+    baseUrl: '${window.location.origin}/api/widget'
+  };
+</script>
+<script src="${window.location.origin}/widget/v1/widget.js"></script>`;
 
   const handleSave = () => {
-    toast({
-      title: "Settings saved",
-      description: "Your widget configuration has been updated.",
+    saveConfigMutation.mutate({
+      widgetName,
+      welcomeMessage,
+      primaryColor,
+      position,
     });
   };
 
@@ -47,6 +106,17 @@ export default function WidgetConfig() {
       description: "Copy the code below and paste it into your website.",
     });
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading configuration...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
