@@ -1,9 +1,11 @@
 import { type User, type InsertUser, type Client, type InsertClient, type ClientWidget, type InsertClientWidget } from "@shared/schema";
-import { randomUUID, randomBytes } from "crypto";
+import { users, clients, clientWidgets } from "@shared/schema";
+import { drizzle } from "drizzle-orm/neon-serverless";
+import { Pool } from "@neondatabase/serverless";
+import { eq } from "drizzle-orm";
+import { randomBytes } from "crypto";
 
-// modify the interface with any CRUD methods
-// you might need
-
+// Storage interface - defines all CRUD operations
 export interface IStorage {
   // User operations
   getUser(id: string): Promise<User | undefined>;
@@ -27,15 +29,23 @@ export interface IStorage {
   getOrCreateClientWidget(clientId: string): Promise<ClientWidget>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-  private clients: Map<string, Client>;
-  private clientWidgets: Map<string, ClientWidget>;
+/**
+ * PostgreSQL-based storage implementation using Drizzle ORM
+ * Provides persistent storage with ACID guarantees and multi-tenant isolation
+ */
+export class DatabaseStorage implements IStorage {
+  private db;
 
   constructor() {
-    this.users = new Map();
-    this.clients = new Map();
-    this.clientWidgets = new Map();
+    if (!process.env.DATABASE_URL) {
+      throw new Error(
+        "DATABASE_URL environment variable is not set. " +
+        "Please configure your PostgreSQL connection string in .env file."
+      );
+    }
+
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    this.db = drizzle(pool);
   }
 
   // ============================================================================
@@ -43,24 +53,38 @@ export class MemStorage implements IStorage {
   // ============================================================================
 
   async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+    const result = await this.db
+      .select()
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+    
+    return result[0];
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const result = await this.db
+      .select()
+      .from(users)
+      .where(eq(users.username, username))
+      .limit(1);
+    
+    return result[0];
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+    const result = await this.db
+      .insert(users)
+      .values(insertUser)
+      .returning();
+    
+    return result[0];
   }
 
   async getAllUsers(): Promise<User[]> {
-    return Array.from(this.users.values());
+    return await this.db
+      .select()
+      .from(users);
   }
 
   // ============================================================================
@@ -68,52 +92,53 @@ export class MemStorage implements IStorage {
   // ============================================================================
 
   async getClientByPublicKey(publicKey: string): Promise<Client | undefined> {
-    return Array.from(this.clients.values()).find(
-      (client) => client.publicApiKey === publicKey,
-    );
+    const result = await this.db
+      .select()
+      .from(clients)
+      .where(eq(clients.publicApiKey, publicKey))
+      .limit(1);
+    
+    return result[0];
   }
 
   async getClient(clientId: string): Promise<Client | undefined> {
-    return this.clients.get(clientId);
+    const result = await this.db
+      .select()
+      .from(clients)
+      .where(eq(clients.id, clientId))
+      .limit(1);
+    
+    return result[0];
   }
 
   async getClientsByUserId(userId: string): Promise<Client[]> {
-    return Array.from(this.clients.values()).filter(
-      (client) => client.userId === userId,
-    );
+    return await this.db
+      .select()
+      .from(clients)
+      .where(eq(clients.userId, userId));
   }
 
   async createClient(insertClient: InsertClient): Promise<Client> {
-    const id = randomUUID();
-    const now = new Date();
+    const result = await this.db
+      .insert(clients)
+      .values(insertClient)
+      .returning();
     
-    const client: Client = {
-      id,
-      userId: insertClient.userId,
-      name: insertClient.name,
-      publicApiKey: insertClient.publicApiKey,
-      allowedDomains: insertClient.allowedDomains || [],
-      status: insertClient.status || "active",
-      createdAt: now,
-    };
-    
-    this.clients.set(id, client);
-    return client;
+    return result[0];
   }
 
   async updateClient(clientId: string, updates: Partial<InsertClient>): Promise<Client> {
-    const existing = this.clients.get(clientId);
-    if (!existing) {
+    const result = await this.db
+      .update(clients)
+      .set(updates)
+      .where(eq(clients.id, clientId))
+      .returning();
+    
+    if (!result[0]) {
       throw new Error("Client not found");
     }
-
-    const updated: Client = {
-      ...existing,
-      ...updates,
-    };
-
-    this.clients.set(clientId, updated);
-    return updated;
+    
+    return result[0];
   }
 
   async regenerateClientApiKey(clientId: string): Promise<Client> {
@@ -130,44 +155,39 @@ export class MemStorage implements IStorage {
   // ============================================================================
 
   async getClientWidget(clientId: string): Promise<ClientWidget | undefined> {
-    return Array.from(this.clientWidgets.values()).find(
-      (widget) => widget.clientId === clientId,
-    );
+    const result = await this.db
+      .select()
+      .from(clientWidgets)
+      .where(eq(clientWidgets.clientId, clientId))
+      .limit(1);
+    
+    return result[0];
   }
 
   async createClientWidget(insertWidget: InsertClientWidget): Promise<ClientWidget> {
-    const id = randomUUID();
-    const now = new Date();
+    const result = await this.db
+      .insert(clientWidgets)
+      .values(insertWidget)
+      .returning();
     
-    const widget: ClientWidget = {
-      id,
-      clientId: insertWidget.clientId,
-      primaryColor: insertWidget.primaryColor || "#3b82f6",
-      position: insertWidget.position || "bottom-right",
-      welcomeMessage: insertWidget.welcomeMessage || "Hi! How can I help?",
-      widgetName: insertWidget.widgetName || "Support",
-      createdAt: now,
-      updatedAt: now,
-    };
-    
-    this.clientWidgets.set(id, widget);
-    return widget;
+    return result[0];
   }
 
   async updateClientWidget(clientId: string, updates: Partial<InsertClientWidget>): Promise<ClientWidget> {
-    const existing = await this.getClientWidget(clientId);
-    if (!existing) {
+    const result = await this.db
+      .update(clientWidgets)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(eq(clientWidgets.clientId, clientId))
+      .returning();
+    
+    if (!result[0]) {
       throw new Error("Widget not found");
     }
-
-    const updated: ClientWidget = {
-      ...existing,
-      ...updates,
-      updatedAt: new Date(),
-    };
-
-    this.clientWidgets.set(existing.id, updated);
-    return updated;
+    
+    return result[0];
   }
 
   async getOrCreateClientWidget(clientId: string): Promise<ClientWidget> {
@@ -180,4 +200,5 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+// Export singleton instance
+export const storage = new DatabaseStorage();
