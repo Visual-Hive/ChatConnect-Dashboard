@@ -1,3 +1,8 @@
+import dotenv from "dotenv";
+
+// Load environment variables from .env file
+dotenv.config();
+
 import { type User, type InsertUser, type Client, type InsertClient, type ClientWidget, type InsertClientWidget } from "@shared/schema";
 import { users, clients, clientWidgets } from "@shared/schema";
 import { drizzle } from "drizzle-orm/neon-serverless";

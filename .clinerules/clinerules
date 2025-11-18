@@ -1,0 +1,596 @@
+# Chat Connect Dashboard - Project Rules
+
+## Project Overview
+
+You are developing Chat Connect Dashboard, a multi-tenant SaaS platform that provides embeddable chat widgets powered by AI/LLM with knowledge base integration. This is a full-stack web application built with React, Express, PostgreSQL, and integrates with Directus CMS and n8n workflows.
+
+## 🚨 CRITICAL: Read Documentation First
+
+**BEFORE writing ANY code, you MUST:**
+- Check `docs/IMPLEMENTATION_AUDIT.md` for current system state
+- Review `docs/ARCHITECTURE.md` for system design
+- Consult `docs/DEVELOPMENT.md` for conventions and patterns
+- Check `docs/MULTI_TENANT_SCHEMA_PLAN.md` for data isolation strategy
+
+## Security
+
+### Sensitive Files
+DO NOT read or modify:
+- `.env` files
+- Any file containing API keys, tokens, or credentials
+- Database connection strings
+- JWT secrets
+- OAuth client secrets
+
+### Critical Security Rules
+- **Multi-tenant isolation is MANDATORY** - every query must filter by clientId
+- **API key authentication required** for all widget endpoints
+- **Domain restriction validation** must be enforced on all widget requests
+- **Rate limiting** must be implemented (100 req/hour per API key)
+- **Input validation** and sanitization on all user inputs
+- **SQL injection prevention** using parameterized queries only
+- **XSS prevention** - sanitize all user-generated content
+
+### Security Patterns
+```typescript
+// ✅ ALWAYS filter by clientId
+const widget = await db.query.widgetConfig.findFirst({
+  where: and(
+    eq(widgetConfig.clientId, clientId),
+    eq(widgetConfig.id, widgetId)
+  )
+});
+
+// ❌ NEVER query without clientId filter
+const widget = await db.query.widgetConfig.findFirst({
+  where: eq(widgetConfig.id, widgetId) // DANGEROUS!
+});
+```
+
+## Architecture
+
+### Core Principles
+1. **Multi-tenant by design** - Complete data isolation per client
+2. **Widget-first API** - Optimized for embedded widget performance
+3. **Knowledge base integration** - Directus for document storage
+4. **AI workflow orchestration** - n8n for LLM processing
+5. **Dashboard for configuration** - Client self-service
+
+### System Components
+```
+┌─────────────────┐
+│  Client Website │
+└────────┬────────┘
+         │ Embeds widget.js
+         ↓
+┌─────────────────┐      ┌──────────────┐
+│  Chat Widget    │ ───> │  Widget API  │
+│  (Public)       │      │  (Express)   │
+└─────────────────┘      └──────┬───────┘
+                                │
+         ┌──────────────────────┼────────────────┐
+         ↓                      ↓                ↓
+┌─────────────┐      ┌──────────────┐   ┌──────────┐
+│  Dashboard  │      │  PostgreSQL  │   │   n8n    │
+│  (React)    │      │  (Drizzle)   │   │ Workflow │
+└─────────────┘      └──────────────┘   └─────┬────┘
+         │                                      │
+         └──────────────────┐                  │
+                            ↓                  ↓
+                    ┌──────────────┐   ┌──────────┐
+                    │  Directus    │   │   LLM    │
+                    │  (CMS/KB)    │   │  (API)   │
+                    └──────────────┘   └──────────┘
+```
+
+### Technology Stack
+- **Frontend:** React 18, TypeScript, Tailwind CSS, Vite
+- **Backend:** Express.js, Node.js 20+
+- **Database:** PostgreSQL 14+, Drizzle ORM
+- **CMS/Knowledge Base:** Directus
+- **AI Workflows:** n8n
+- **Deployment:** Docker, Docker Compose
+
+### Data Flow Patterns
+
+**Widget Chat Flow:**
+```
+1. User types message in widget
+2. Widget POSTs to /api/widget/chat (with API key)
+3. Backend validates API key + domain
+4. Backend queries Directus for knowledge base docs
+5. Backend calls n8n webhook with message + context
+6. n8n processes with LLM (OpenAI/Anthropic)
+7. Response flows back through chain
+8. Widget displays response
+```
+
+**Configuration Flow:**
+```
+1. User logs into dashboard
+2. Edits widget settings (appearance, prompts, domains)
+3. Dashboard PUTs to /api/dashboard/widget/:clientId
+4. Backend validates and saves to PostgreSQL
+5. Next widget load reflects new config
+```
+
+## Code Style
+
+### TypeScript Standards
+- **Strict mode enabled** - No `any` types, use `unknown` when uncertain
+- **Explicit return types** for all functions
+- **Interface over type** for object shapes
+- **Type guards** for runtime type checking
+
+```typescript
+// ✅ GOOD
+interface WidgetConfig {
+  clientId: string;
+  apiKey: string;
+  appearance: {
+    primaryColor: string;
+    position: 'bottom-right' | 'bottom-left';
+  };
+}
+
+function updateConfig(config: WidgetConfig): Promise<WidgetConfig> {
+  // implementation
+}
+
+// ❌ BAD
+function updateConfig(config: any) {  // No 'any'!
+  // implementation
+}
+```
+
+### React Patterns
+- **Functional components only** - No class components
+- **Hooks for state** - useState, useEffect, custom hooks
+- **Component composition** - Small, focused components
+- **Props validation** - TypeScript interfaces for all props
+
+```typescript
+// ✅ GOOD
+interface ButtonProps {
+  variant: 'primary' | 'secondary';
+  onClick: () => void;
+  children: React.ReactNode;
+  disabled?: boolean;
+}
+
+export function Button({ variant, onClick, children, disabled = false }: ButtonProps) {
+  return (
+    <button 
+      className={`btn btn-${variant}`}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {children}
+    </button>
+  );
+}
+```
+
+### API Development
+- **RESTful conventions** - Proper HTTP methods and status codes
+- **Consistent response format:**
+```typescript
+// Success
+{ success: true, data: T }
+
+// Error
+{ success: false, error: { code: string, message: string } }
+```
+
+- **Error handling middleware** - Centralized error responses
+- **Request validation** - Validate all inputs before processing
+- **Rate limiting** - Protect all public endpoints
+
+### Database Patterns
+- **Drizzle ORM** - Type-safe queries
+- **Migration-based schema** - Never modify schema directly in prod
+- **Soft deletes** - Use `deletedAt` timestamp, don't actually delete
+- **Timestamps** - All tables have `createdAt` and `updatedAt`
+
+```typescript
+// ✅ GOOD - Multi-tenant safe query
+const widgets = await db.query.widgetConfig.findMany({
+  where: eq(widgetConfig.clientId, clientId)
+});
+
+// ✅ GOOD - Soft delete
+await db.update(widgetConfig)
+  .set({ deletedAt: new Date() })
+  .where(eq(widgetConfig.id, id));
+
+// ❌ BAD - Hard delete
+await db.delete(widgetConfig).where(eq(widgetConfig.id, id));
+```
+
+### Naming Conventions
+```typescript
+// Components: PascalCase
+export function WidgetConfigPanel() {}
+
+// Functions: camelCase
+function validateApiKey() {}
+
+// Constants: UPPER_SNAKE_CASE
+const MAX_FILE_SIZE = 5_000_000;
+const API_BASE_URL = '/api';
+
+// Database tables: camelCase singular
+const widgetConfig = pgTable('widget_config', { ... });
+
+// API routes: kebab-case
+router.get('/widget-config', handler);
+
+// Files:
+// - Components: PascalCase (WidgetConfig.tsx)
+// - Utilities: camelCase (apiClient.ts)
+// - Types: camelCase (widgetTypes.ts)
+```
+
+## Testing
+
+### Test Requirements
+- **Unit tests** - Core business logic (validation, formatting, calculations)
+- **Integration tests** - API endpoints with database
+- **E2E tests** - Critical user flows (widget embedding, chat, config)
+
+### Testing Patterns
+```typescript
+// Test file naming: ComponentName.test.tsx or functionName.test.ts
+
+describe('Widget API', () => {
+  it('should validate API key before processing request', async () => {
+    const response = await request(app)
+      .post('/api/widget/chat')
+      .send({ message: 'Hello' })
+      .expect(401);
+    
+    expect(response.body.error.code).toBe('INVALID_API_KEY');
+  });
+
+  it('should enforce multi-tenant isolation', async () => {
+    const client1Widget = await createTestWidget({ clientId: 'client1' });
+    const client2Token = generateToken({ clientId: 'client2' });
+    
+    const response = await request(app)
+      .get(`/api/dashboard/widget/${client1Widget.id}`)
+      .set('Authorization', `Bearer ${client2Token}`)
+      .expect(404); // Should not find client1's widget
+  });
+});
+```
+
+## Documentation
+
+### Update When Changing
+- `docs/ARCHITECTURE.md` - System design changes
+- `docs/DEVELOPMENT.md` - New patterns or conventions
+- `docs/IMPLEMENTATION_AUDIT.md` - Track what's been built
+- `docs/API.md` - API endpoint changes
+- `README.md` - User-facing changes
+
+### Code Comments
+- **Complex logic** - Explain the WHY, not the WHAT
+- **Security considerations** - Document security implications
+- **Performance optimizations** - Note why optimization was needed
+- **Workarounds** - Explain temporary solutions and link to issues
+
+```typescript
+// ✅ GOOD - Explains reasoning
+// We hash the API key in the database to prevent exposure if DB is compromised.
+// The widget sends the plaintext key, which we hash and compare.
+const hashedKey = await hashApiKey(apiKey);
+
+// ❌ BAD - Just repeats code
+// Hash the API key
+const hashedKey = await hashApiKey(apiKey);
+```
+
+## Git Workflow
+
+### Branch Naming
+- `feature/widget-appearance-settings` - New features
+- `fix/api-key-validation-bug` - Bug fixes
+- `refactor/database-client-queries` - Code refactoring
+- `docs/update-api-documentation` - Documentation updates
+
+### Commit Messages
+Format: `type(scope): description`
+
+Types:
+- `feat` - New feature
+- `fix` - Bug fix
+- `refactor` - Code refactoring
+- `docs` - Documentation
+- `test` - Tests
+- `chore` - Maintenance
+
+Examples:
+- `feat(widget): add customizable chat bubble colors`
+- `fix(api): enforce domain restrictions on widget endpoints`
+- `refactor(db): improve multi-tenant query performance`
+- `docs(readme): update deployment instructions`
+
+## Performance
+
+### Critical Metrics
+- **Widget load time:** <500ms
+- **Chat response time:** <3s (including LLM)
+- **Dashboard load time:** <1s
+- **API response time:** <200ms
+
+### Optimization Guidelines
+- **Widget:** Minimize bundle size, lazy load components
+- **API:** Database query optimization, caching (Redis)
+- **Images:** Compress and optimize, use CDN
+- **Database:** Index frequently queried columns (clientId, apiKey)
+
+```typescript
+// ✅ GOOD - Indexed query
+const config = await db.query.widgetConfig.findFirst({
+  where: and(
+    eq(widgetConfig.clientId, clientId), // Indexed
+    eq(widgetConfig.apiKey, apiKey)      // Indexed
+  )
+});
+
+// ⚠️ CONSIDER - Complex query on large table
+const stats = await db.select({
+  count: count(),
+  avgResponseTime: avg(chatLogs.responseTime)
+})
+.from(chatLogs)
+.where(eq(chatLogs.clientId, clientId))
+.groupBy(chatLogs.date);
+// Consider: Add materialized view or cache results
+```
+
+## Error Handling
+
+### Error Categories
+1. **Validation Errors** (400) - Bad user input
+2. **Authentication Errors** (401) - Invalid/missing credentials
+3. **Authorization Errors** (403) - Valid credentials, insufficient permissions
+4. **Not Found Errors** (404) - Resource doesn't exist
+5. **Server Errors** (500) - Unexpected server issues
+
+### Error Response Format
+```typescript
+interface ErrorResponse {
+  success: false;
+  error: {
+    code: string;          // Machine-readable: 'INVALID_API_KEY'
+    message: string;       // Human-readable: 'The API key is invalid or expired'
+    details?: unknown;     // Optional: Additional context
+  };
+}
+```
+
+### Logging
+- **Error logs** - All 500 errors with stack trace
+- **Security logs** - Authentication failures, rate limit hits
+- **Audit logs** - Configuration changes, API key regenerations
+- **Performance logs** - Slow queries (>1s)
+
+## Development Workflow
+
+### Before Writing Code
+1. **Read relevant docs** - Check ARCHITECTURE.md and related files
+2. **Analyze existing code** - Understand patterns already in use
+3. **Check for similar implementations** - DRY principle
+4. **State your approach** - Explain plan before coding
+5. **Rate confidence (1-10)** - If <8, ask questions first
+
+### While Writing Code
+1. **DO NOT BE LAZY. DO NOT OMIT CODE.** - Always provide complete implementations
+2. **Never use `// ... existing code`** - Show all code
+3. **Follow existing patterns** - Consistency is critical
+4. **Add comments** - Explain complex logic
+5. **Validate inputs** - Never trust user data
+6. **Handle errors** - Use try-catch, return proper errors
+
+### After Writing Code
+1. **Test your changes** - Run `npm run dev` and verify
+2. **Update documentation** - If you changed architecture/patterns
+3. **Check for security issues** - Review checklist above
+4. **Consider performance** - Is this code fast enough?
+5. **Summarize changes** - What did you build and why?
+
+## Common Patterns
+
+### API Key Validation
+```typescript
+async function validateApiKey(req: Request): Promise<{ clientId: string }> {
+  const apiKey = req.headers['x-api-key'];
+  
+  if (!apiKey) {
+    throw new ApiError('MISSING_API_KEY', 'API key is required', 401);
+  }
+
+  const client = await db.query.clients.findFirst({
+    where: eq(clients.apiKey, apiKey)
+  });
+
+  if (!client) {
+    throw new ApiError('INVALID_API_KEY', 'Invalid or expired API key', 401);
+  }
+
+  return { clientId: client.id };
+}
+```
+
+### Domain Restriction Validation
+```typescript
+async function validateDomain(origin: string, clientId: string): Promise<void> {
+  const client = await db.query.clients.findFirst({
+    where: eq(clients.id, clientId),
+    columns: { allowedDomains: true }
+  });
+
+  if (!client.allowedDomains || client.allowedDomains.length === 0) {
+    return; // No restrictions
+  }
+
+  const isAllowed = client.allowedDomains.some(domain => 
+    origin === domain || origin.endsWith(`.${domain}`)
+  );
+
+  if (!isAllowed) {
+    throw new ApiError('DOMAIN_NOT_ALLOWED', 'Domain not authorized', 403);
+  }
+}
+```
+
+## Phase-Based Development
+
+### Current Phase: Backend Integration (75% Complete)
+**Priority: Database + Directus + n8n Integration**
+
+**Next Steps:**
+1. ✅ Complete PostgreSQL schema setup
+2. ✅ Implement Directus collections and API access
+3. ⚠️ Build n8n workflows for chat processing
+4. ⚠️ Integrate LLM (OpenAI/Anthropic)
+5. ⚠️ Add file upload and processing pipeline
+
+### Stop and Review Checkpoints
+
+**🛑 MANDATORY REVIEW POINTS:**
+1. **After database schema changes** - Review with Thong before pushing
+2. **Before deploying to production** - Full security audit required
+3. **After adding new API endpoints** - Test thoroughly, document
+4. **When confidence <8** - Stop and ask questions
+5. **Before making architectural changes** - Discuss approach first
+
+## Confidence Rating System
+
+Before major changes, rate your confidence (1-10):
+
+- **10:** Perfect, battle-tested, no concerns
+- **9:** Excellent, thoroughly tested
+- **8:** Good, works well, minor refinement may be needed
+- **7:** Solid, functional, some concerns
+- **6:** Acceptable, works but needs improvement
+- **5:** Functional but concerning - **STOP AND REVIEW**
+- **4:** Problematic - **STOP AND ASK**
+- **3:** Serious issues - **STOP AND ASK**
+- **2:** Barely working - **STOP AND ASK**
+- **1:** Broken - **STOP AND ASK**
+
+**If confidence <8, STOP and get human guidance.**
+
+## AI Assistant Behavior
+
+### Analysis First
+- State your understanding of the requirement
+- Outline your approach
+- Identify potential issues
+- Rate your confidence
+- Ask questions if unsure
+
+### Complete Implementations
+- Never use `// ... rest of code` or `// existing code...`
+- Always show full, complete implementations
+- If a file is long, show it in sections but include ALL code
+- Break long functions into smaller ones, but implement them all
+
+### Documentation
+- Update docs when making changes
+- Add comments explaining complex logic
+- Include usage examples where helpful
+- Keep IMPLEMENTATION_AUDIT.md current
+
+### Security Mindset
+- Every endpoint must validate authentication
+- Every database query must filter by clientId
+- Every user input must be validated
+- Every error must be handled gracefully
+
+## Project-Specific Notes
+
+### Widget Development
+- Widget JS is vanilla JavaScript (no framework)
+- Must work across all browsers (Chrome, Firefox, Safari, Edge)
+- Must not conflict with host page CSS/JS
+- All styles scoped with `.cc-` prefix
+
+### Dashboard Development
+- React 18 with TypeScript
+- Tailwind CSS for styling
+- Radix UI for component primitives
+- React Query for data fetching
+
+### API Development
+- Express.js with TypeScript
+- Drizzle ORM for database
+- Zod for validation
+- JWT for dashboard auth
+- API keys for widget auth
+
+### Knowledge Base
+- Directus for document storage
+- Support PDF, DOCX, TXT uploads
+- Tag-based organization
+- Full-text search capability
+
+### AI Integration
+- n8n for workflow orchestration
+- OpenAI or Anthropic for LLM
+- Retrieval-augmented generation (RAG)
+- Context-aware responses
+
+## Quick Reference
+
+### File Locations
+```
+project/
+├── client/              # React dashboard
+│   ├── src/
+│   │   ├── components/  # React components
+│   │   ├── pages/       # Page components
+│   │   ├── lib/         # Utilities
+│   │   └── types/       # TypeScript types
+├── public/
+│   └── widget/          # Widget files (vanilla JS)
+│       └── v1/
+│           ├── widget.js
+│           └── widget.css
+├── server/              # Express API
+│   ├── src/
+│   │   ├── routes/      # API routes
+│   │   ├── middleware/  # Express middleware
+│   │   └── lib/         # Server utilities
+├── shared/              # Shared between client/server
+│   ├── schema.ts        # Database schema (Drizzle)
+│   └── types.ts         # Shared types
+├── docs/                # Project documentation
+└── tests/               # Test files
+```
+
+### Key Commands
+```bash
+npm run dev          # Start development server
+npm run build        # Build for production
+npm run check        # TypeScript type checking
+npm run db:push      # Push database schema changes
+npm run db:studio    # Open Drizzle Studio (DB GUI)
+npm test             # Run tests
+```
+
+### Helpful Documentation
+- `docs/ARCHITECTURE.md` - System design
+- `docs/DEVELOPMENT.md` - Dev guidelines
+- `docs/IMPLEMENTATION_AUDIT.md` - Current state
+- `docs/API.md` - API reference
+- `docs/WIDGET_API_README.md` - Widget API docs
+- `docs/MULTI_TENANT_SCHEMA_PLAN.md` - Data model
+
+---
+
+**Remember:** Quality over speed. Understanding over output. Security over convenience.
+
+**When in doubt, ASK. When confidence is low, STOP and get review.**
