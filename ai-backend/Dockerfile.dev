@@ -1,0 +1,38 @@
+# =============================================================================
+# ChatConnect AI Backend - Python Dockerfile (Development)
+# =============================================================================
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast dependency management
+RUN pip install uv
+
+# Copy dependency files
+COPY pyproject.toml ./
+
+# Create virtual environment and install dependencies (including dev)
+RUN uv venv /app/.venv && \
+    . /app/.venv/bin/activate && \
+    uv pip install -e ".[dev]"
+
+# Copy application code
+COPY . .
+
+# Set environment
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app"
+ENV PYTHONUNBUFFERED=1
+
+# Expose port
+EXPOSE 8000
+
+# Start with hot reload
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

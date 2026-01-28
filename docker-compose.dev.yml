@@ -1,0 +1,42 @@
+# =============================================================================
+# ChatConnect Dashboard - Docker Compose Dev Overrides
+# =============================================================================
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Express Dashboard (Dev Mode with Hot Reload)
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      NODE_ENV: development
+    volumes:
+      # Mount source code for hot reload
+      - ./client:/app/client
+      - ./server:/app/server
+      - ./shared:/app/shared
+      - ./public:/app/public
+      # Exclude node_modules (use container's version)
+      - /app/node_modules
+    command: npm run dev
+
+  # ---------------------------------------------------------------------------
+  # Python AI Backend (Dev Mode with Hot Reload)
+  # ---------------------------------------------------------------------------
+  ai-backend:
+    build:
+      context: ./ai-backend
+      dockerfile: Dockerfile.dev
+    environment:
+      LOG_LEVEL: debug
+    volumes:
+      # Mount source code for hot reload
+      - ./ai-backend/src:/app/src
+      - ./ai-backend/tests:/app/tests
+      # Exclude virtual env
+      - /app/.venv
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload

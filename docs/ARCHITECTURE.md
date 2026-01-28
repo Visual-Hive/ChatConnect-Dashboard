@@ -1,644 +1,498 @@
-# Architecture Documentation
-
-## System Overview
-
-ChatConnect Dashboard follows a modern full-stack architecture with clear separation between client and server concerns, leveraging TypeScript throughout for type safety and developer experience.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Browser (Client)                        │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │              React Application                         │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │ │
-│  │  │  Pages   │  │Components│  │  React Query Cache   │ │ │
-│  │  └────┬─────┘  └────┬─────┘  └──────────┬───────────┘ │ │
-│  │       └─────────────┴────────────────────┘             │ │
-│  └─────────────────────┬────────────────────────────────┬─┘ │
-└────────────────────────┼────────────────────────────────┼───┘
-                         │ HTTP/REST                      │ WS
-                         │                                │
-┌────────────────────────┼────────────────────────────────┼───┐
-│                        │  Express Server                │   │
-│  ┌─────────────────────┼────────────────────────────────┼─┐ │
-│  │  ┌─────────────┐    │         ┌──────────────────┐  │ │ │
-│  │  │   Routes    │────┘         │   WebSocket      │──┘ │ │
-│  │  └──────┬──────┘              │   Handler        │    │ │
-│  │         │                     └──────────────────┘    │ │
-│  │  ┌──────┴────────────┐                                │ │
-│  │  │   Middleware      │                                │ │
-│  │  │  - Auth           │                                │ │
-│  │  │  - Session        │                                │ │
-│  │  │  - Validation     │                                │ │
-│  │  └──────┬────────────┘                                │ │
-│  └─────────┼─────────────────────────────────────────────┘ │
-│            │                                                │
-│  ┌─────────┴────────────┐                                  │
-│  │   Drizzle ORM        │                                  │
-│  └─────────┬────────────┘                                  │
-└────────────┼───────────────────────────────────────────────┘
-             │
-┌────────────┴────────────┐
-│   PostgreSQL Database   │
-│  - Users                │
-│  - Sessions             │
-│  - (Future tables)      │
-└─────────────────────────┘
-```
-
-## Frontend Architecture
-
-### Technology Choices
-
-**React 18**: Latest stable React with concurrent features support
-- Chosen for: Mature ecosystem, excellent TypeScript support, component reusability
-
-**Wouter**: Minimal client-side router (~1.2KB)
-- Chosen over React Router for: Smaller bundle size, simpler API, sufficient for SPA needs
-
-**TanStack React Query v5**: Server state management
-- Chosen for: Automatic caching, background refetching, optimistic updates, request deduplication
-
-**Radix UI**: Unstyled, accessible component primitives
-- Chosen for: WAI-ARIA compliant, composable, works seamlessly with Tailwind CSS
-
-### Component Architecture
-
-```
-client/src/
-├── components/
-│   ├── ui/                    # Base UI components (Radix wrappers)
-│   │   ├── button.tsx         # Styled button variants
-│   │   ├── card.tsx           # Container components
-│   │   ├── form.tsx           # Form field components
-│   │   └── ...                # Other primitives
-│   │
-│   ├── examples/              # Component usage examples
-│   │   └── *.tsx              # Demo/test components
-│   │
-│   ├── app-sidebar.tsx        # Application sidebar navigation
-│   ├── theme-provider.tsx     # Dark mode context provider
-│   ├── stats-card.tsx         # Dashboard statistic display
-│   ├── widget-preview.tsx     # Live widget preview
-│   └── ...                    # Feature-specific components
-│
-├── pages/                     # Route page components
-│   ├── overview.tsx           # Dashboard home page
-│   ├── widget-config.tsx      # Widget configuration page
-│   ├── knowledge-base.tsx     # Knowledge management page
-│   ├── analytics.tsx          # Analytics dashboard page
-│   ├── settings.tsx           # Settings page
-│   └── not-found.tsx          # 404 page
-│
-├── hooks/                     # Custom React hooks
-│   ├── use-mobile.tsx         # Responsive breakpoint detection
-│   └── use-toast.ts           # Toast notification hook
-│
-└── lib/                       # Utilities and configuration
-    ├── queryClient.ts         # React Query configuration
-    └── utils.ts               # Utility functions (cn, etc.)
-```
-
-### Component Patterns
-
-#### 1. UI Component Pattern (Radix Wrappers)
-```typescript
-// client/src/components/ui/button.tsx
-import * as React from "react"
-import { Slot } from "@radix-ui/react-slot"
-import { cva, type VariantProps } from "class-variance-authority"
-
-const buttonVariants = cva(
-  "inline-flex items-center justify-center...",
-  {
-    variants: {
-      variant: { default: "...", destructive: "...", outline: "..." },
-      size: { default: "h-10 px-4", sm: "h-9 px-3", lg: "h-11 px-8" }
-    },
-    defaultVariants: { variant: "default", size: "default" }
-  }
-)
-
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
-  asChild?: boolean
-}
-
-const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
-    const Comp = asChild ? Slot : "button"
-    return (
-      <Comp
-        className={cn(buttonVariants({ variant, size, className }))}
-        ref={ref}
-        {...props}
-      />
-    )
-  }
-)
-```
-
-#### 2. Page Component Pattern
-```typescript
-// client/src/pages/overview.tsx
-import { useQuery } from "@tanstack/react-query";
-import { StatsCard } from "@/components/stats-card";
-
-export default function Overview() {
-  // Fetch data with React Query
-  const { data: stats, isLoading } = useQuery({
-    queryKey: ["dashboard-stats"],
-    queryFn: async () => {
-      const res = await fetch("/api/stats");
-      return res.json();
-    },
-  });
-
-  return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">
-          Welcome back! Here's your overview.
-        </p>
-      </div>
-      
-      {/* Stats grid following design system */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        <StatsCard
-          title="Total Messages"
-          value={stats?.messages || 0}
-          icon={MessageSquare}
-          trend={stats?.messagesTrend}
-        />
-        {/* More stats cards... */}
-      </div>
-    </div>
-  );
-}
-```
-
-#### 3. Feature Component Pattern
-```typescript
-// client/src/components/widget-preview.tsx
-import { Card } from "@/components/ui/card";
-
-interface WidgetPreviewProps {
-  config: {
-    primaryColor: string;
-    position: "left" | "right";
-    welcomeMessage: string;
-  };
-}
-
-export function WidgetPreview({ config }: WidgetPreviewProps) {
-  return (
-    <Card className="p-6 sticky top-6">
-      <h3 className="text-lg font-semibold mb-4">Live Preview</h3>
-      <div className="relative aspect-video bg-secondary rounded-lg overflow-hidden">
-        {/* Preview rendering logic */}
-        <div 
-          className={`absolute bottom-4 ${
-            config.position === "left" ? "left-4" : "right-4"
-          }`}
-          style={{ backgroundColor: config.primaryColor }}
-        >
-          {/* Widget mockup */}
-        </div>
-      </div>
-    </Card>
-  );
-}
-```
-
-### State Management Strategy
-
-**Server State (React Query):**
-- API data fetching and caching
-- Background refetching for real-time updates
-- Optimistic updates for instant UI feedback
-- Automatic retry and error handling
-
-```typescript
-// Query example
-const { data, isLoading, error } = useQuery({
-  queryKey: ['documents'],
-  queryFn: fetchDocuments,
-  staleTime: 5 * 60 * 1000, // 5 minutes
-});
-
-// Mutation example
-const uploadMutation = useMutation({
-  mutationFn: uploadDocument,
-  onSuccess: () => {
-    queryClient.invalidateQueries({ queryKey: ['documents'] });
-  },
-});
-```
-
-**Local UI State (React hooks):**
-- Form inputs (React Hook Form)
-- Modal open/closed states
-- Temporary UI interactions
-- Theme preferences (Context API)
-
-**URL State (Wouter):**
-- Current page/route
-- Query parameters for filters/pagination
-
-### Routing Strategy
-
-Using Wouter for minimal, declarative routing:
-
-```typescript
-// client/src/App.tsx
-<Switch>
-  <Route path="/" component={Overview} />
-  <Route path="/widget" component={WidgetConfig} />
-  <Route path="/knowledge" component={KnowledgeBase} />
-  <Route path="/analytics" component={Analytics} />
-  <Route path="/settings" component={Settings} />
-  <Route component={NotFound} />
-</Switch>
-```
-
-### Styling Architecture
-
-**Tailwind CSS v4** with custom configuration:
-- Design system values mapped to Tailwind theme
-- Custom color palette in HSL format
-- Consistent spacing scale (4, 6, 8, 12, 16, 20, 24)
-- Typography utilities matching design guidelines
-
-**CSS Utilities:**
-```typescript
-// lib/utils.ts
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-
-// Merge Tailwind classes intelligently
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
-}
-```
-
-**Component Variants (CVA):**
-```typescript
-import { cva } from "class-variance-authority"
-
-const buttonVariants = cva("base-classes", {
-  variants: {
-    variant: { primary: "...", secondary: "..." },
-    size: { sm: "...", md: "...", lg: "..." }
-  }
-})
-```
-
-## Backend Architecture
-
-### Technology Choices
-
-**Express.js**: Minimal, unopinionated web framework
-- Chosen for: Flexibility, middleware ecosystem, TypeScript compatibility
-
-**Drizzle ORM**: TypeScript-first SQL ORM
-- Chosen for: Type-safe queries, minimal runtime overhead, migration system
-
-**Passport.js**: Authentication middleware
-- Chosen for: Mature, flexible strategy system, Express integration
-
-### Server Structure
-
-```
-server/
-├── index.ts          # Server entry point, middleware setup
-├── routes.ts         # API route definitions
-├── storage.ts        # Database connection and initialization
-└── vite.ts           # Vite dev server middleware integration
-```
-
-### Express Application Setup
-
-```typescript
-// server/index.ts
-import express from "express";
-import session from "express-session";
-import passport from "passport";
-import { setupVite } from "./vite";
-import { registerRoutes } from "./routes";
-
-const app = express();
-
-// Middleware stack
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-
-// Session configuration (PostgreSQL-backed)
-app.use(session({
-  store: new (require('connect-pg-simple')(session))({
-    conObject: { connectionString: process.env.DATABASE_URL },
-    createTableIfMissing: true
-  }),
-  secret: process.env.SESSION_SECRET!,
-  resave: false,
-  saveUninitialized: false,
-  cookie: { 
-    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    secure: process.env.NODE_ENV === "production"
-  }
-}));
-
-// Authentication
-app.use(passport.initialize());
-app.use(passport.session());
-
-// API routes
-registerRoutes(app);
-
-// Vite middleware (development) or static serving (production)
-if (process.env.NODE_ENV === "development") {
-  await setupVite(app);
-} else {
-  app.use(express.static("dist/public"));
-}
-```
-
-### API Route Structure
-
-```typescript
-// server/routes.ts
-import type { Express } from "express";
-import { db } from "./storage";
-import { users } from "../shared/schema";
-
-export function registerRoutes(app: Express) {
-  // Authentication routes
-  app.post("/api/auth/login", passport.authenticate("local"), (req, res) => {
-    res.json({ user: req.user });
-  });
-
-  app.post("/api/auth/logout", (req, res) => {
-    req.logout(() => res.json({ success: true }));
-  });
-
-  // Protected API routes
-  app.get("/api/stats", requireAuth, async (req, res) => {
-    // Fetch and return dashboard statistics
-  });
-
-  app.get("/api/documents", requireAuth, async (req, res) => {
-    // Fetch knowledge base documents
-  });
-
-  // ... more routes
-}
-
-// Authentication middleware
-function requireAuth(req, res, next) {
-  if (req.isAuthenticated()) {
-    return next();
-  }
-  res.status(401).json({ error: "Unauthorized" });
-}
-```
-
-### Database Layer (Drizzle ORM)
-
-```typescript
-// server/storage.ts
-import { drizzle } from "drizzle-orm/neon-http";
-import { neon } from "@neondatabase/serverless";
-import * as schema from "../shared/schema";
-
-const sql = neon(process.env.DATABASE_URL!);
-export const db = drizzle(sql, { schema });
-
-// Query examples:
-// const users = await db.select().from(schema.users);
-// const user = await db.select().from(schema.users).where(eq(schema.users.id, userId));
-// await db.insert(schema.users).values({ username, password });
-```
-
-```typescript
-// shared/schema.ts
-import { pgTable, text, varchar, timestamp, boolean } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-// Type-safe insert schema with Zod validation
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
-});
-
-export type User = typeof users.$inferSelect;
-export type InsertUser = typeof users.$inferInsert;
-```
-
-### Authentication Flow
-
-```
-1. User submits credentials
-   POST /api/auth/login { username, password }
-   
-2. Passport Local Strategy validates
-   - Query user from database
-   - Compare hashed password
-   
-3. On success, establish session
-   - Session ID stored in cookie
-   - Session data stored in PostgreSQL
-   
-4. Subsequent requests include session cookie
-   - Passport deserializes user from session
-   - User object available in req.user
-   
-5. Protected routes check authentication
-   - Middleware: requireAuth()
-   - Returns 401 if not authenticated
-```
-
-## Database Schema Design
-
-### Current Schema
-
-```sql
--- Users table (authentication)
-CREATE TABLE users (
-  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
-  username TEXT NOT NULL UNIQUE,
-  password TEXT NOT NULL  -- bcrypt hashed
-);
-
--- Sessions table (auto-created by connect-pg-simple)
-CREATE TABLE session (
-  sid VARCHAR PRIMARY KEY,
-  sess JSON NOT NULL,
-  expire TIMESTAMP NOT NULL
-);
-```
-
-### Planned Schema Extensions
-
-```typescript
-// Future schema additions for full functionality
-
-export const conferences = pgTable("conferences", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").references(() => users.id),
-  name: text("name").notNull(),
-  // ... conference settings
-});
-
-export const widgets = pgTable("widgets", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  conferenceId: varchar("conference_id").references(() => conferences.id),
-  primaryColor: text("primary_color"),
-  position: text("position"), // 'left' | 'right'
-  welcomeMessage: text("welcome_message"),
-  // ... widget configuration
-});
-
-export const documents = pgTable("documents", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  conferenceId: varchar("conference_id").references(() => conferences.id),
-  filename: text("filename").notNull(),
-  status: text("status"), // 'processing' | 'ready' | 'failed'
-  uploadedAt: timestamp("uploaded_at").defaultNow(),
-  // ... document metadata
-});
-
-export const chatMessages = pgTable("chat_messages", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  widgetId: varchar("widget_id").references(() => widgets.id),
-  message: text("message").notNull(),
-  response: text("response"),
-  rating: integer("rating"), // 1-5 stars
-  createdAt: timestamp("created_at").defaultNow(),
-  // ... analytics data
-});
-```
-
-## Build System
-
-### Development Mode (Vite)
-
-```typescript
-// server/vite.ts
-import type { Express } from "express";
-import { createServer as createViteServer } from "vite";
-
-export async function setupVite(app: Express) {
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: "custom",
-  });
-
-  app.use(vite.middlewares);
-
-  app.use("*", async (req, res, next) => {
-    const url = req.originalUrl;
-    try {
-      const template = await vite.transformIndexHtml(url, 
-        fs.readFileSync("client/index.html", "utf-8")
-      );
-      res.status(200).set({ "Content-Type": "text/html" }).end(template);
-    } catch (e) {
-      vite.ssrFixStacktrace(e);
-      next(e);
-    }
-  });
-}
-```
-
-### Production Build
-
-```json
-{
-  "scripts": {
-    "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist"
-  }
-}
-```
-
-**Build process:**
-1. `vite build` - Builds client assets to `dist/public`
-2. `esbuild` - Bundles server code to `dist/index.js`
-3. Result: Single deployable directory with server + static assets
-
-## Security Considerations
-
-### Authentication
-- Passwords hashed with bcrypt (via Passport local strategy)
-- Session secrets stored in environment variables
-- HTTP-only cookies (CSRF protection recommended for production)
-
-### Database
-- Parameterized queries via Drizzle ORM (SQL injection prevention)
-- Connection string in environment variables
-- Database credentials never committed to repository
-
-### API
-- All mutation endpoints require authentication
-- Input validation with Zod schemas
-- Rate limiting should be added for production
-
-### Future Enhancements
-- Add CSRF protection (csurf middleware)
-- Implement rate limiting (express-rate-limit)
-- Add API key rotation functionality
-- File upload validation and virus scanning
-- Content Security Policy headers
-
-## Performance Optimization
-
-### Frontend
-- Code splitting by route (Vite automatic)
-- React Query caching reduces redundant requests
-- Lazy loading for heavy components
-- Debounced search inputs
-- Virtual scrolling for large lists (future)
-
-### Backend
-- Database connection pooling (Neon serverless)
-- Session store in PostgreSQL (distributed-ready)
-- Static asset caching headers
-- Gzip compression for responses
-
-### Database
-- Indexes on frequently queried columns
-- Pagination for large datasets
-- Query optimization with Drizzle's query builder
-
-## Deployment Architecture
-
-```
-Production Environment:
-├── Load Balancer (if needed)
-├── Node.js Application (Express)
-│   ├── Serves API endpoints
-│   └── Serves static assets (client build)
-├── PostgreSQL Database
-│   └── Stores users, sessions, data
-└── File Storage (future)
-    └── Document uploads (S3, etc.)
-```
-
-## Monitoring & Observability (Future)
-
-Recommended additions:
-- Application logging (Winston, Pino)
-- Error tracking (Sentry)
-- Performance monitoring (New Relic, DataDog)
-- Database query performance tracking
-- User analytics integration
+# ChatConnect Dashboard - Architecture V2
+
+**Version:** 2.0  
+**Last Updated:** January 2025  
+**Status:** Planning / Implementation
 
 ---
 
-This architecture provides a solid foundation for a modern SaaS dashboard with room to scale as features are added.
+## Overview
+
+ChatConnect Dashboard is a multi-tenant SaaS platform providing embeddable AI chat widgets. This document describes the updated architecture with a dedicated Python backend for AI processing.
+
+---
+
+## Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CLIENT WEBSITES                                    │
+│                      (Where widgets are embedded)                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ widget.js loads
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           WIDGET LAYER                                       │
+│                                                                              │
+│   ┌──────────────────────────────────────────────────────────────────┐      │
+│   │                     widget.js (Vanilla JS)                        │      │
+│   │                                                                   │      │
+│   │  • Loads config from Express API                                 │      │
+│   │  • Sends chat messages to Python Backend (FastAPI)               │      │
+│   │  • Streams responses via SSE                                     │      │
+│   │  • Local session management                                      │      │
+│   └──────────────────────────────────────────────────────────────────┘      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+          │                                              │
+          │ GET /api/widget/config                       │ POST /chat (streaming)
+          ▼                                              ▼
+┌─────────────────────────────┐          ┌─────────────────────────────────────┐
+│     EXPRESS API             │          │         PYTHON BACKEND              │
+│     (Dashboard + Config)    │          │         (AI Processing)             │
+│                             │          │                                     │
+│  ┌───────────────────────┐  │          │  ┌─────────────────────────────┐   │
+│  │   Dashboard Routes    │  │          │  │        FastAPI              │   │
+│  │   • Auth              │  │          │  │   • POST /chat              │   │
+│  │   • Widget config     │  │          │  │   • POST /chat/stream       │   │
+│  │   • Client management │  │          │  │   • POST /process-document  │   │
+│  │   • File upload proxy │  │◄────────►│  │   • GET /health             │   │
+│  └───────────────────────┘  │  Internal│  └─────────────────────────────┘   │
+│                             │   API    │                │                    │
+│  ┌───────────────────────┐  │          │  ┌─────────────────────────────┐   │
+│  │   Widget Routes       │  │          │  │       LangGraph             │   │
+│  │   • GET /config       │  │          │  │   • retrieve node           │   │
+│  │   • Health check      │  │          │  │   • generate node           │   │
+│  └───────────────────────┘  │          │  │   • log node (async)        │   │
+│                             │          │  └─────────────────────────────┘   │
+└──────────────┬──────────────┘          │                │                    │
+               │                          │  ┌─────────────────────────────┐   │
+               │                          │  │       Services              │   │
+               │                          │  │   • Qdrant (vectors)        │   │
+               │                          │  │   • Claude/GPT (LLM)        │   │
+               │                          │  │   • Redis (cache)           │   │
+               │                          │  │   • Embeddings              │   │
+               │                          │  └─────────────────────────────┘   │
+               │                          │                                     │
+               │                          └──────────────────┬──────────────────┘
+               │                                             │
+               ▼                                             ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           DATA LAYER                                         │
+│                                                                              │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
+│  │   PostgreSQL    │  │     Qdrant      │  │     Redis       │              │
+│  │                 │  │                 │  │                 │              │
+│  │  • users        │  │  • embeddings   │  │  • query cache  │              │
+│  │  • clients      │  │  • chunks       │  │  • embed cache  │              │
+│  │  • widgets      │  │  • metadata     │  │  • rate limits  │              │
+│  │  • documents    │  │                 │  │  • sessions     │              │
+│  │  • chat_logs    │  │                 │  │                 │              │
+│  │  • usage_stats  │  │                 │  │                 │              │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Component Responsibilities
+
+### Express API (Node.js/TypeScript)
+
+**Primary Role:** Dashboard, configuration, authentication
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/auth/*` | User authentication (login, register, logout) |
+| `GET/PUT /api/dashboard/widget/:clientId` | Widget configuration CRUD |
+| `GET/PATCH /api/dashboard/clients/:clientId` | Client management |
+| `POST /api/dashboard/documents/upload` | File upload (proxies to Python) |
+| `GET /api/widget/config` | Widget config fetch (API key auth) |
+| `GET /api/widget/health` | Health check |
+
+**Does NOT handle:** Chat messages, AI processing, vector search
+
+### Python Backend (FastAPI + LangGraph)
+
+**Primary Role:** AI chat processing, document embedding, vector search
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /chat` | Process chat message, return response |
+| `GET /chat/stream` | SSE streaming chat response |
+| `POST /process-document` | Chunk and embed uploaded document |
+| `POST /embed` | Generate embeddings for text |
+| `GET /health` | Health check with queue status |
+
+**Internal endpoints (called by Express):**
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /internal/validate-client` | Validate client ID exists |
+| `GET /internal/client/:clientId/config` | Get client's LLM config (model, tier) |
+
+---
+
+## Data Flow: Chat Message
+
+```
+1. User types message in widget
+   │
+2. widget.js validates input (1-2000 chars)
+   │
+3. POST to Python Backend /chat/stream
+   │  Headers: x-api-key: pk_live_xxx
+   │  Body: { message, sessionId, metadata }
+   │
+4. FastAPI validates API key against PostgreSQL
+   │  → Retrieves client_id, tier (free/paid), model preference
+   │
+5. LangGraph workflow executes:
+   │
+   │  ┌─────────────────────────────────────────┐
+   │  │  RETRIEVE NODE                          │
+   │  │  • Embed query (text-embedding-3-large) │
+   │  │  • Search Qdrant (filter by client_id)  │
+   │  │  • Return top 5 relevant chunks         │
+   │  └─────────────────────────────────────────┘
+   │                    │
+   │                    ▼
+   │  ┌─────────────────────────────────────────┐
+   │  │  GENERATE NODE                          │
+   │  │  • Build prompt with context            │
+   │  │  • Call LLM (Sonnet 4.5 or GPT-4o-mini) │
+   │  │  • Stream response chunks               │
+   │  └─────────────────────────────────────────┘
+   │                    │
+   │                    ▼
+   │  ┌─────────────────────────────────────────┐
+   │  │  LOG NODE (async, non-blocking)         │
+   │  │  • Save to PostgreSQL chat_logs         │
+   │  │  • Update usage statistics              │
+   │  │  • Track token consumption              │
+   │  └─────────────────────────────────────────┘
+   │
+6. SSE stream back to widget
+   │
+7. widget.js renders response with typing effect
+```
+
+---
+
+## Data Flow: Document Upload
+
+```
+1. User uploads file in dashboard
+   │
+2. Express receives multipart upload
+   │  POST /api/dashboard/documents/upload
+   │
+3. Express validates:
+   │  • File type (PDF, DOCX, TXT, CSV)
+   │  • File size (<10MB)
+   │  • User authentication
+   │  • Client ownership
+   │
+4. Express saves file metadata to PostgreSQL
+   │  Status: 'uploading'
+   │
+5. Express forwards to Python Backend
+   │  POST /process-document
+   │  Body: { document_id, client_id, file_data (base64), file_type }
+   │
+6. Python processes asynchronously:
+   │
+   │  ┌─────────────────────────────────────────┐
+   │  │  PARSE                                  │
+   │  │  • Extract text from PDF/DOCX/TXT       │
+   │  │  • Parse CSV rows                       │
+   │  └─────────────────────────────────────────┘
+   │                    │
+   │                    ▼
+   │  ┌─────────────────────────────────────────┐
+   │  │  CHUNK                                  │
+   │  │  • Split into ~500 token chunks         │
+   │  │  • Overlap 50 tokens between chunks     │
+   │  └─────────────────────────────────────────┘
+   │                    │
+   │                    ▼
+   │  ┌─────────────────────────────────────────┐
+   │  │  EMBED                                  │
+   │  │  • Generate embeddings (batch)          │
+   │  │  • Cache embeddings in Redis            │
+   │  └─────────────────────────────────────────┘
+   │                    │
+   │                    ▼
+   │  ┌─────────────────────────────────────────┐
+   │  │  STORE                                  │
+   │  │  • Upsert to Qdrant with metadata       │
+   │  │  • client_id, document_id in payload    │
+   │  └─────────────────────────────────────────┘
+   │
+7. Python calls back to Express with progress
+   │  POST /api/internal/document-progress
+   │  Body: { document_id, status, progress, chunks_total, qdrant_point_ids }
+   │
+8. Express updates PostgreSQL, broadcasts via WebSocket
+   │
+9. Dashboard shows real-time progress
+```
+
+---
+
+## Multi-Tenant Isolation
+
+### Database Level (PostgreSQL)
+
+Every query MUST include `client_id` filter:
+
+```sql
+-- ✅ CORRECT
+SELECT * FROM documents WHERE client_id = $1 AND id = $2;
+
+-- ❌ WRONG (exposes all clients' data)
+SELECT * FROM documents WHERE id = $1;
+```
+
+### Vector Level (Qdrant)
+
+All Qdrant points include `client_id` in payload:
+
+```python
+# When storing
+qdrant.upsert(
+    collection_name="documents",
+    points=[
+        PointStruct(
+            id=chunk_id,
+            vector=embedding,
+            payload={
+                "client_id": client_id,  # REQUIRED
+                "document_id": document_id,
+                "content": chunk_text,
+                "chunk_index": i
+            }
+        )
+    ]
+)
+
+# When searching - ALWAYS filter
+qdrant.search(
+    collection_name="documents",
+    query_vector=query_embedding,
+    query_filter=Filter(
+        must=[
+            FieldCondition(
+                key="client_id",
+                match=MatchValue(value=client_id)  # REQUIRED
+            )
+        ]
+    ),
+    limit=5
+)
+```
+
+---
+
+## LLM Tier Strategy
+
+| Tier | Model | Use Case | Cost |
+|------|-------|----------|------|
+| Free | GPT-4o-mini | Trial users, basic queries | ~$0.0001/query |
+| Paid | Claude Sonnet 4.5 | Paying customers, complex queries | ~$0.003/query |
+
+Selection logic in Python backend:
+
+```python
+async def get_llm_for_client(client_id: str) -> BaseLLM:
+    client = await get_client(client_id)
+    
+    if client.tier == "free":
+        return OpenAI(model="gpt-4o-mini", temperature=0.7)
+    else:
+        return Anthropic(model="claude-sonnet-4-5-20250514", temperature=0.7)
+```
+
+---
+
+## Caching Strategy
+
+### Layer 1: Prompt Caching (Anthropic)
+
+```python
+# Static system prompt is cached (90% cost reduction)
+response = await anthropic.messages.create(
+    model="claude-sonnet-4-5-20250514",
+    system=[
+        {
+            "type": "text",
+            "text": STATIC_SYSTEM_PROMPT,  # ~2000 tokens
+            "cache_control": {"type": "ephemeral"}
+        },
+        {
+            "type": "text", 
+            "text": dynamic_context  # ~200 tokens, not cached
+        }
+    ],
+    messages=[...]
+)
+```
+
+### Layer 2: Query Cache (Redis)
+
+```python
+# Cache common queries for 5 minutes
+cache_key = f"query:{client_id}:{hash(query)}"
+cached = await redis.get(cache_key)
+if cached:
+    return json.loads(cached)
+
+# Execute search...
+await redis.setex(cache_key, 300, json.dumps(results))
+```
+
+### Layer 3: Embedding Cache (Redis)
+
+```python
+# Cache embeddings for 1 hour
+cache_key = f"embed:{hash(text)}"
+cached = await redis.get(cache_key)
+if cached:
+    return json.loads(cached)
+
+# Generate embedding...
+await redis.setex(cache_key, 3600, json.dumps(embedding))
+```
+
+---
+
+## Environment Variables
+
+### Express API (.env)
+
+```bash
+# Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/chatconnect
+
+# Session
+SESSION_SECRET=your-session-secret
+
+# Python Backend
+PYTHON_BACKEND_URL=http://localhost:8000
+PYTHON_BACKEND_SECRET=internal-api-secret
+
+# File Storage
+UPLOAD_DIR=/var/uploads
+MAX_FILE_SIZE=10485760  # 10MB
+```
+
+### Python Backend (.env)
+
+```bash
+# Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/chatconnect
+
+# Vector Store
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=optional-api-key
+
+# Cache
+REDIS_URL=redis://localhost:6379
+
+# LLM Providers
+ANTHROPIC_API_KEY=sk-ant-xxx
+OPENAI_API_KEY=sk-xxx
+
+# Embeddings
+EMBEDDING_MODEL=text-embedding-3-large
+
+# Internal Auth
+INTERNAL_API_SECRET=internal-api-secret
+
+# Server
+HOST=0.0.0.0
+PORT=8000
+WORKERS=4
+```
+
+---
+
+## Deployment Topology
+
+### Development
+
+```
+localhost:5000  → Express (npm run dev)
+localhost:8000  → Python (uvicorn)
+localhost:5432  → PostgreSQL
+localhost:6333  → Qdrant
+localhost:6379  → Redis
+```
+
+### Production
+
+```
+                    ┌─────────────────┐
+                    │  Load Balancer  │
+                    │  (Nginx/Caddy)  │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+        ┌──────────┐  ┌──────────┐  ┌──────────┐
+        │ Express  │  │ Express  │  │  Python  │
+        │  :5000   │  │  :5001   │  │  :8000   │
+        └──────────┘  └──────────┘  └──────────┘
+              │              │              │
+              └──────────────┼──────────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+        ┌──────────┐  ┌──────────┐  ┌──────────┐
+        │ Postgres │  │  Qdrant  │  │  Redis   │
+        │ (managed)│  │ (managed)│  │ (managed)│
+        └──────────┘  └──────────┘  └──────────┘
+```
+
+---
+
+## Security Considerations
+
+1. **API Key Validation:** Every widget request validates `x-api-key` header
+2. **Domain Restriction:** CORS validates against `allowedDomains` per client
+3. **Rate Limiting:** Redis-based rate limiting (100 req/min for free, 1000 for paid)
+4. **Input Sanitization:** All user input sanitized before LLM processing
+5. **Internal API Auth:** Express ↔ Python communication uses shared secret
+6. **SQL Injection Prevention:** Parameterized queries only (Drizzle ORM)
+7. **XSS Prevention:** Widget sanitizes all rendered content
+
+---
+
+## Monitoring
+
+### Metrics (Prometheus)
+
+```python
+# Python backend metrics
+chat_requests_total{client_id, tier, status}
+chat_latency_seconds{client_id, tier}
+llm_tokens_total{model, type}  # input/output/cached
+qdrant_search_duration_seconds
+embedding_cache_hits_total
+embedding_cache_misses_total
+```
+
+### Logging (Structured)
+
+```python
+logger.info(
+    "chat_request_completed",
+    trace_id=trace_id,
+    client_id=client_id,
+    latency_ms=latency,
+    tokens_in=tokens_in,
+    tokens_out=tokens_out,
+    cache_hit=cache_hit
+)
+```
+
+---
+
+## Next Steps
+
+1. **Phase 1:** Update Express routes to remove n8n, add Python backend proxy
+2. **Phase 2:** Create Python backend project structure
+3. **Phase 3:** Implement LangGraph workflow
+4. **Phase 4:** Add document processing pipeline
+5. **Phase 5:** Production deployment and monitoring

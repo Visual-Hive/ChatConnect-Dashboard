@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-You are developing Chat Connect Dashboard, a multi-tenant SaaS platform that provides embeddable chat widgets powered by AI/LLM with knowledge base integration. This is a full-stack web application built with React, Express, PostgreSQL, and integrates with Directus CMS and n8n workflows.
+You are developing Chat Connect Dashboard, a multi-tenant SaaS platform that provides embeddable chat widgets powered by AI/LLM with knowledge base integration. This is a full-stack web application built with React, Express, PostgreSQL, and a Python AI backend using FastAPI and LangGraph.
 
 ## 🚨 CRITICAL: Read Documentation First
 
@@ -11,6 +11,7 @@ You are developing Chat Connect Dashboard, a multi-tenant SaaS platform that pro
 - Review `docs/ARCHITECTURE.md` for system design
 - Consult `docs/DEVELOPMENT.md` for conventions and patterns
 - Check `docs/MULTI_TENANT_SCHEMA_PLAN.md` for data isolation strategy
+- Review `docs/BILLING_AND_LIMITS.md` for usage limits and billing rules
 
 ## Security
 
@@ -26,7 +27,7 @@ DO NOT read or modify:
 - **Multi-tenant isolation is MANDATORY** - every query must filter by clientId
 - **API key authentication required** for all widget endpoints
 - **Domain restriction validation** must be enforced on all widget requests
-- **Rate limiting** must be implemented (100 req/hour per API key)
+- **Rate limiting** must be implemented (see BILLING_AND_LIMITS.md)
 - **Input validation** and sanitization on all user inputs
 - **SQL injection prevention** using parameterized queries only
 - **XSS prevention** - sanitize all user-generated content
@@ -52,43 +53,87 @@ const widget = await db.query.widgetConfig.findFirst({
 ### Core Principles
 1. **Multi-tenant by design** - Complete data isolation per client
 2. **Widget-first API** - Optimized for embedded widget performance
-3. **Knowledge base integration** - Directus for document storage
-4. **AI workflow orchestration** - n8n for LLM processing
+3. **Knowledge base integration** - PostgreSQL + Qdrant for document storage and search
+4. **Python AI backend** - FastAPI + LangGraph for LLM processing
 5. **Dashboard for configuration** - Client self-service
+6. **Tiered pricing** - Free (testing only) and Paid (production deployment)
 
 ### System Components
 ```
-┌─────────────────┐
-│  Client Website │
-└────────┬────────┘
-         │ Embeds widget.js
-         ↓
-┌─────────────────┐      ┌──────────────┐
-│  Chat Widget    │ ───> │  Widget API  │
-│  (Public)       │      │  (Express)   │
-└─────────────────┘      └──────┬───────┘
-                                │
-         ┌──────────────────────┼────────────────┐
-         ↓                      ↓                ↓
-┌─────────────┐      ┌──────────────┐   ┌──────────┐
-│  Dashboard  │      │  PostgreSQL  │   │   n8n    │
-│  (React)    │      │  (Drizzle)   │   │ Workflow │
-└─────────────┘      └──────────────┘   └─────┬────┘
-         │                                      │
-         └──────────────────┐                  │
-                            ↓                  ↓
-                    ┌──────────────┐   ┌──────────┐
-                    │  Directus    │   │   LLM    │
-                    │  (CMS/KB)    │   │  (API)   │
-                    └──────────────┘   └──────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CLIENT WEBSITES                                    │
+│                      (Paid tier only - production)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Embeds widget.js (paid tier)
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           WIDGET LAYER                                       │
+│                                                                              │
+│   ┌──────────────────────────────────────────────────────────────────┐      │
+│   │                     widget.js (Vanilla JS)                        │      │
+│   │                                                                   │      │
+│   │  • Loads config from Express API                                 │      │
+│   │  • Sends chat messages to Python Backend (FastAPI)               │      │
+│   │  • Streams responses via SSE                                     │      │
+│   │  • Local session management                                      │      │
+│   └──────────────────────────────────────────────────────────────────┘      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+          │                                              │
+          │ GET /api/widget/config                       │ POST /chat (streaming)
+          ▼                                              ▼
+┌─────────────────────────────┐          ┌─────────────────────────────────────┐
+│     EXPRESS API             │          │         PYTHON BACKEND              │
+│     (Dashboard + Config)    │          │         (AI Processing)             │
+│                             │          │                                     │
+│  ┌───────────────────────┐  │          │  ┌─────────────────────────────┐   │
+│  │   Dashboard Routes    │  │          │  │        FastAPI              │   │
+│  │   • Auth              │  │          │  │   • POST /chat              │   │
+│  │   • Widget config     │  │          │  │   • POST /chat/stream       │   │
+│  │   • Client management │  │          │  │   • POST /process-document  │   │
+│  │   • Document upload   │  │◄────────►│  │   • GET /health             │   │
+│  │   • Usage & billing   │  │  Internal│  └─────────────────────────────┘   │
+│  └───────────────────────┘  │   API    │                │                    │
+│                             │          │  ┌─────────────────────────────┐   │
+│  ┌───────────────────────┐  │          │  │       LangGraph             │   │
+│  │   Widget Routes       │  │          │  │   • retrieve node           │   │
+│  │   • GET /config       │  │          │  │   • generate node           │   │
+│  │   • Health check      │  │          │  │   • log node (async)        │   │
+│  └───────────────────────┘  │          │  └─────────────────────────────┘   │
+│                             │          │                                     │
+└──────────────┬──────────────┘          └──────────────────┬──────────────────┘
+               │                                            │
+               ▼                                            ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           DATA LAYER                                         │
+│                                                                              │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
+│  │   PostgreSQL    │  │     Qdrant      │  │     Redis       │              │
+│  │                 │  │                 │  │                 │              │
+│  │  • users        │  │  • embeddings   │  │  • query cache  │              │
+│  │  • clients      │  │  • chunks       │  │  • embed cache  │              │
+│  │  • widgets      │  │  • metadata     │  │  • rate limits  │              │
+│  │  • documents    │  │                 │  │  • sessions     │              │
+│  │  • chat_logs    │  │                 │  │                 │              │
+│  │  • usage_stats  │  │                 │  │                 │              │
+│  │  • billing      │  │                 │  │                 │              │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Technology Stack
 - **Frontend:** React 18, TypeScript, Tailwind CSS, Vite
-- **Backend:** Express.js, Node.js 20+
-- **Database:** PostgreSQL 14+, Drizzle ORM
-- **CMS/Knowledge Base:** Directus
-- **AI Workflows:** n8n
+- **Dashboard API:** Express.js, Node.js 20+, Drizzle ORM
+- **AI Backend:** Python 3.11+, FastAPI, LangGraph, Uvicorn
+- **Database:** PostgreSQL 16+
+- **Vector Store:** Qdrant
+- **Cache:** Redis 7+
+- **LLM Providers:** 
+  - Free tier: OpenAI GPT-4o-mini
+  - Paid tier: Anthropic Claude Sonnet 4.5
+- **Embeddings:** OpenAI text-embedding-3-large
 - **Deployment:** Docker, Docker Compose
 
 ### Data Flow Patterns
@@ -96,13 +141,15 @@ const widget = await db.query.widgetConfig.findFirst({
 **Widget Chat Flow:**
 ```
 1. User types message in widget
-2. Widget POSTs to /api/widget/chat (with API key)
-3. Backend validates API key + domain
-4. Backend queries Directus for knowledge base docs
-5. Backend calls n8n webhook with message + context
-6. n8n processes with LLM (OpenAI/Anthropic)
-7. Response flows back through chain
-8. Widget displays response
+2. Widget POSTs to Python backend /api/widget/chat/stream (with API key)
+3. Python backend validates API key + checks rate limits
+4. Python backend checks deployment restrictions (free = dashboard only)
+5. LangGraph workflow executes:
+   a. Retrieve: Query Qdrant for relevant context (filtered by clientId)
+   b. Generate: Call LLM (GPT-4o-mini or Claude based on tier)
+   c. Log: Async save to PostgreSQL (chat_logs, usage_stats)
+6. SSE stream response back to widget
+7. Widget displays response with typing effect
 ```
 
 **Configuration Flow:**
@@ -112,6 +159,71 @@ const widget = await db.query.widgetConfig.findFirst({
 3. Dashboard PUTs to /api/dashboard/widget/:clientId
 4. Backend validates and saves to PostgreSQL
 5. Next widget load reflects new config
+```
+
+**Document Upload Flow:**
+```
+1. User uploads file in dashboard (PDF, DOCX, TXT, CSV)
+2. Express validates file type/size, saves metadata to PostgreSQL
+3. Express forwards to Python backend /process-document
+4. Python parses → chunks → embeds → stores in Qdrant
+5. Progress updates via polling or WebSocket
+6. Document available for RAG queries
+```
+
+## Billing & Rate Limiting
+
+### Tier Overview
+
+| Feature | Free Tier | Paid Tier |
+|---------|-----------|-----------|
+| Dashboard access | ✅ | ✅ |
+| Widget testing (dashboard) | ✅ 100 req/hour | ✅ Unlimited |
+| External deployment | ❌ | ✅ |
+| Rate limit | 100 req/hour | 1000 req/hour base |
+| Overage | N/A | Pay per request |
+| LLM Model | GPT-4o-mini | Claude Sonnet 4.5 |
+| Email alerts | ❌ | ✅ (80% usage) |
+| Hard cap option | N/A | ✅ (widget hides) |
+
+### Implementation Rules
+
+**Free Tier:**
+- Widget ONLY works on dashboard preview/test page
+- Origin must match dashboard domain
+- 100 requests/hour (silent limit, no error shown)
+- After limit: Show friendly "Please upgrade" message
+- Cannot copy embed code for external use
+
+**Paid Tier:**
+- Widget works on any allowed domain
+- 1000 requests/hour included in base plan
+- Email alert at 80% usage
+- Options when limit reached:
+  - Pay overage (default)
+  - Hard cap (widget disappears)
+- Overage rate: $X per 100 requests (TBD)
+
+### Rate Limit Implementation
+```python
+# Redis key pattern: rate:{client_id}:{hour_bucket}
+# Use INCR with EXPIRE for atomic counting
+
+async def check_rate_limit(client_id: str, tier: str) -> bool:
+    limit = 100 if tier == "free" else client.hourly_limit
+    current = await redis.incr(f"rate:{client_id}:{hour_bucket}")
+    
+    if current == 1:
+        await redis.expire(key, 3600)  # 1 hour TTL
+    
+    if current > limit:
+        if tier == "paid" and not client.hard_cap_enabled:
+            # Allow but flag for overage billing
+            await record_overage(client_id)
+            return True
+        return False
+    
+    return True
 ```
 
 ## Code Style
@@ -143,33 +255,33 @@ function updateConfig(config: any) {  // No 'any'!
 }
 ```
 
+### Python Standards
+- **Type hints required** - All functions must have type annotations
+- **Pydantic for validation** - Use models for all request/response data
+- **Async by default** - Use async/await for I/O operations
+- **Structured logging** - Use structlog, not print()
+
+```python
+# ✅ GOOD
+async def get_client_config(client_id: str) -> ClientConfig | None:
+    """Retrieve client configuration by ID."""
+    result = await db.fetch_one(
+        "SELECT * FROM clients WHERE id = $1",
+        client_id
+    )
+    return ClientConfig(**result) if result else None
+
+# ❌ BAD
+def get_client_config(client_id):  # Missing types!
+    print(f"Getting config for {client_id}")  # Use logger!
+    # ...
+```
+
 ### React Patterns
 - **Functional components only** - No class components
 - **Hooks for state** - useState, useEffect, custom hooks
 - **Component composition** - Small, focused components
 - **Props validation** - TypeScript interfaces for all props
-
-```typescript
-// ✅ GOOD
-interface ButtonProps {
-  variant: 'primary' | 'secondary';
-  onClick: () => void;
-  children: React.ReactNode;
-  disabled?: boolean;
-}
-
-export function Button({ variant, onClick, children, disabled = false }: ButtonProps) {
-  return (
-    <button 
-      className={`btn btn-${variant}`}
-      onClick={onClick}
-      disabled={disabled}
-    >
-      {children}
-    </button>
-  );
-}
-```
 
 ### API Development
 - **RESTful conventions** - Proper HTTP methods and status codes
@@ -182,12 +294,9 @@ export function Button({ variant, onClick, children, disabled = false }: ButtonP
 { success: false, error: { code: string, message: string } }
 ```
 
-- **Error handling middleware** - Centralized error responses
-- **Request validation** - Validate all inputs before processing
-- **Rate limiting** - Protect all public endpoints
-
 ### Database Patterns
-- **Drizzle ORM** - Type-safe queries
+- **Drizzle ORM (Express)** - Type-safe queries
+- **asyncpg (Python)** - Async PostgreSQL access
 - **Migration-based schema** - Never modify schema directly in prod
 - **Soft deletes** - Use `deletedAt` timestamp, don't actually delete
 - **Timestamps** - All tables have `createdAt` and `updatedAt`
@@ -219,8 +328,8 @@ function validateApiKey() {}
 const MAX_FILE_SIZE = 5_000_000;
 const API_BASE_URL = '/api';
 
-// Database tables: camelCase singular
-const widgetConfig = pgTable('widget_config', { ... });
+// Database tables: snake_case
+const widget_config = pgTable('widget_config', { ... });
 
 // API routes: kebab-case
 router.get('/widget-config', handler);
@@ -229,6 +338,7 @@ router.get('/widget-config', handler);
 // - Components: PascalCase (WidgetConfig.tsx)
 // - Utilities: camelCase (apiClient.ts)
 // - Types: camelCase (widgetTypes.ts)
+// - Python: snake_case (widget_routes.py)
 ```
 
 ## Testing
@@ -237,11 +347,10 @@ router.get('/widget-config', handler);
 - **Unit tests** - Core business logic (validation, formatting, calculations)
 - **Integration tests** - API endpoints with database
 - **E2E tests** - Critical user flows (widget embedding, chat, config)
+- **Multi-tenant isolation tests** - CRITICAL
 
 ### Testing Patterns
 ```typescript
-// Test file naming: ComponentName.test.tsx or functionName.test.ts
-
 describe('Widget API', () => {
   it('should validate API key before processing request', async () => {
     const response = await request(app)
@@ -261,6 +370,19 @@ describe('Widget API', () => {
       .set('Authorization', `Bearer ${client2Token}`)
       .expect(404); // Should not find client1's widget
   });
+  
+  it('should block free tier from external deployment', async () => {
+    const freeClient = await createTestClient({ tier: 'free' });
+    
+    const response = await request(pythonApp)
+      .post('/api/widget/chat')
+      .set('x-api-key', freeClient.apiKey)
+      .set('Origin', 'https://external-site.com')  // Not dashboard
+      .send({ message: 'Hello', sessionId: uuid() })
+      .expect(403);
+    
+    expect(response.body.error.code).toBe('DEPLOYMENT_NOT_ALLOWED');
+  });
 });
 ```
 
@@ -271,6 +393,7 @@ describe('Widget API', () => {
 - `docs/DEVELOPMENT.md` - New patterns or conventions
 - `docs/IMPLEMENTATION_AUDIT.md` - Track what's been built
 - `docs/API.md` - API endpoint changes
+- `docs/BILLING_AND_LIMITS.md` - Pricing or limit changes
 - `README.md` - User-facing changes
 
 ### Code Comments
@@ -278,17 +401,6 @@ describe('Widget API', () => {
 - **Security considerations** - Document security implications
 - **Performance optimizations** - Note why optimization was needed
 - **Workarounds** - Explain temporary solutions and link to issues
-
-```typescript
-// ✅ GOOD - Explains reasoning
-// We hash the API key in the database to prevent exposure if DB is compromised.
-// The widget sends the plaintext key, which we hash and compare.
-const hashedKey = await hashApiKey(apiKey);
-
-// ❌ BAD - Just repeats code
-// Hash the API key
-const hashedKey = await hashApiKey(apiKey);
-```
 
 ## Git Workflow
 
@@ -301,19 +413,12 @@ const hashedKey = await hashApiKey(apiKey);
 ### Commit Messages
 Format: `type(scope): description`
 
-Types:
-- `feat` - New feature
-- `fix` - Bug fix
-- `refactor` - Code refactoring
-- `docs` - Documentation
-- `test` - Tests
-- `chore` - Maintenance
+Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
 
 Examples:
 - `feat(widget): add customizable chat bubble colors`
 - `fix(api): enforce domain restrictions on widget endpoints`
-- `refactor(db): improve multi-tenant query performance`
-- `docs(readme): update deployment instructions`
+- `feat(billing): add overage tracking and email alerts`
 
 ## Performance
 
@@ -325,29 +430,9 @@ Examples:
 
 ### Optimization Guidelines
 - **Widget:** Minimize bundle size, lazy load components
-- **API:** Database query optimization, caching (Redis)
-- **Images:** Compress and optimize, use CDN
+- **API:** Database query optimization, Redis caching
+- **LLM:** Prompt caching (Anthropic), embedding caching
 - **Database:** Index frequently queried columns (clientId, apiKey)
-
-```typescript
-// ✅ GOOD - Indexed query
-const config = await db.query.widgetConfig.findFirst({
-  where: and(
-    eq(widgetConfig.clientId, clientId), // Indexed
-    eq(widgetConfig.apiKey, apiKey)      // Indexed
-  )
-});
-
-// ⚠️ CONSIDER - Complex query on large table
-const stats = await db.select({
-  count: count(),
-  avgResponseTime: avg(chatLogs.responseTime)
-})
-.from(chatLogs)
-.where(eq(chatLogs.clientId, clientId))
-.groupBy(chatLogs.date);
-// Consider: Add materialized view or cache results
-```
 
 ## Error Handling
 
@@ -356,25 +441,20 @@ const stats = await db.select({
 2. **Authentication Errors** (401) - Invalid/missing credentials
 3. **Authorization Errors** (403) - Valid credentials, insufficient permissions
 4. **Not Found Errors** (404) - Resource doesn't exist
-5. **Server Errors** (500) - Unexpected server issues
+5. **Rate Limit Errors** (429) - Too many requests
+6. **Server Errors** (500) - Unexpected server issues
 
 ### Error Response Format
 ```typescript
 interface ErrorResponse {
   success: false;
   error: {
-    code: string;          // Machine-readable: 'INVALID_API_KEY'
-    message: string;       // Human-readable: 'The API key is invalid or expired'
+    code: string;          // Machine-readable: 'RATE_LIMIT_EXCEEDED'
+    message: string;       // Human-readable: 'You have exceeded your hourly limit'
     details?: unknown;     // Optional: Additional context
   };
 }
 ```
-
-### Logging
-- **Error logs** - All 500 errors with stack trace
-- **Security logs** - Authentication failures, rate limit hits
-- **Audit logs** - Configuration changes, API key regenerations
-- **Performance logs** - Slow queries (>1s)
 
 ## Development Workflow
 
@@ -394,191 +474,75 @@ interface ErrorResponse {
 6. **Handle errors** - Use try-catch, return proper errors
 
 ### After Writing Code
-1. **Test your changes** - Run `npm run dev` and verify
+1. **Test your changes** - Run locally and verify
 2. **Update documentation** - If you changed architecture/patterns
 3. **Check for security issues** - Review checklist above
 4. **Consider performance** - Is this code fast enough?
 5. **Summarize changes** - What did you build and why?
 
-## Common Patterns
-
-### API Key Validation
-```typescript
-async function validateApiKey(req: Request): Promise<{ clientId: string }> {
-  const apiKey = req.headers['x-api-key'];
-  
-  if (!apiKey) {
-    throw new ApiError('MISSING_API_KEY', 'API key is required', 401);
-  }
-
-  const client = await db.query.clients.findFirst({
-    where: eq(clients.apiKey, apiKey)
-  });
-
-  if (!client) {
-    throw new ApiError('INVALID_API_KEY', 'Invalid or expired API key', 401);
-  }
-
-  return { clientId: client.id };
-}
-```
-
-### Domain Restriction Validation
-```typescript
-async function validateDomain(origin: string, clientId: string): Promise<void> {
-  const client = await db.query.clients.findFirst({
-    where: eq(clients.id, clientId),
-    columns: { allowedDomains: true }
-  });
-
-  if (!client.allowedDomains || client.allowedDomains.length === 0) {
-    return; // No restrictions
-  }
-
-  const isAllowed = client.allowedDomains.some(domain => 
-    origin === domain || origin.endsWith(`.${domain}`)
-  );
-
-  if (!isAllowed) {
-    throw new ApiError('DOMAIN_NOT_ALLOWED', 'Domain not authorized', 403);
-  }
-}
-```
-
-## Phase-Based Development
-
-### Current Phase: Backend Integration (75% Complete)
-**Priority: Database + Directus + n8n Integration**
-
-**Next Steps:**
-1. ✅ Complete PostgreSQL schema setup
-2. ✅ Implement Directus collections and API access
-3. ⚠️ Build n8n workflows for chat processing
-4. ⚠️ Integrate LLM (OpenAI/Anthropic)
-5. ⚠️ Add file upload and processing pipeline
-
-### Stop and Review Checkpoints
-
-**🛑 MANDATORY REVIEW POINTS:**
-1. **After database schema changes** - Review with Thong before pushing
-2. **Before deploying to production** - Full security audit required
-3. **After adding new API endpoints** - Test thoroughly, document
-4. **When confidence <8** - Stop and ask questions
-5. **Before making architectural changes** - Discuss approach first
-
 ## Confidence Rating System
 
 Before major changes, rate your confidence (1-10):
 
-- **10:** Perfect, battle-tested, no concerns
-- **9:** Excellent, thoroughly tested
-- **8:** Good, works well, minor refinement may be needed
-- **7:** Solid, functional, some concerns
-- **6:** Acceptable, works but needs improvement
-- **5:** Functional but concerning - **STOP AND REVIEW**
-- **4:** Problematic - **STOP AND ASK**
-- **3:** Serious issues - **STOP AND ASK**
-- **2:** Barely working - **STOP AND ASK**
-- **1:** Broken - **STOP AND ASK**
+- **9-10:** Proceed with implementation
+- **7-8:** Proceed but flag for review
+- **5-6:** Ask clarifying questions first
+- **1-4:** Stop and request human guidance
 
 **If confidence <8, STOP and get human guidance.**
-
-## AI Assistant Behavior
-
-### Analysis First
-- State your understanding of the requirement
-- Outline your approach
-- Identify potential issues
-- Rate your confidence
-- Ask questions if unsure
-
-### Complete Implementations
-- Never use `// ... rest of code` or `// existing code...`
-- Always show full, complete implementations
-- If a file is long, show it in sections but include ALL code
-- Break long functions into smaller ones, but implement them all
-
-### Documentation
-- Update docs when making changes
-- Add comments explaining complex logic
-- Include usage examples where helpful
-- Keep IMPLEMENTATION_AUDIT.md current
-
-### Security Mindset
-- Every endpoint must validate authentication
-- Every database query must filter by clientId
-- Every user input must be validated
-- Every error must be handled gracefully
-
-## Project-Specific Notes
-
-### Widget Development
-- Widget JS is vanilla JavaScript (no framework)
-- Must work across all browsers (Chrome, Firefox, Safari, Edge)
-- Must not conflict with host page CSS/JS
-- All styles scoped with `.cc-` prefix
-
-### Dashboard Development
-- React 18 with TypeScript
-- Tailwind CSS for styling
-- Radix UI for component primitives
-- React Query for data fetching
-
-### API Development
-- Express.js with TypeScript
-- Drizzle ORM for database
-- Zod for validation
-- JWT for dashboard auth
-- API keys for widget auth
-
-### Knowledge Base
-- Directus for document storage
-- Support PDF, DOCX, TXT uploads
-- Tag-based organization
-- Full-text search capability
-
-### AI Integration
-- n8n for workflow orchestration
-- OpenAI or Anthropic for LLM
-- Retrieval-augmented generation (RAG)
-- Context-aware responses
 
 ## Quick Reference
 
 ### File Locations
 ```
 project/
-├── client/              # React dashboard
+├── client/                 # React dashboard
 │   ├── src/
-│   │   ├── components/  # React components
-│   │   ├── pages/       # Page components
-│   │   ├── lib/         # Utilities
-│   │   └── types/       # TypeScript types
+│   │   ├── components/     # React components
+│   │   ├── pages/          # Page components
+│   │   ├── lib/            # Utilities
+│   │   └── types/          # TypeScript types
 ├── public/
-│   └── widget/          # Widget files (vanilla JS)
-│       └── v1/
-│           ├── widget.js
-│           └── widget.css
-├── server/              # Express API
+│   └── widget/             # Widget files (vanilla JS)
+│       └── v2/
+│           └── widget.js
+├── server/                 # Express API
+│   ├── routes/             # API routes
+│   ├── middleware/         # Express middleware
+│   └── services/           # External service clients
+├── ai-backend/             # Python FastAPI backend
 │   ├── src/
-│   │   ├── routes/      # API routes
-│   │   ├── middleware/  # Express middleware
-│   │   └── lib/         # Server utilities
-├── shared/              # Shared between client/server
-│   ├── schema.ts        # Database schema (Drizzle)
-│   └── types.ts         # Shared types
-├── docs/                # Project documentation
-└── tests/               # Test files
+│   │   ├── api/            # FastAPI routes
+│   │   ├── graph/          # LangGraph workflows
+│   │   ├── services/       # Qdrant, LLM, Redis clients
+│   │   └── models/         # Pydantic models
+│   └── tests/
+├── shared/                 # Shared between client/server
+│   ├── schema.ts           # Database schema (Drizzle)
+│   └── types.ts            # Shared types
+├── docs/                   # Project documentation
+└── docker-compose.yml      # Local development stack
 ```
 
 ### Key Commands
 ```bash
-npm run dev          # Start development server
-npm run build        # Build for production
-npm run check        # TypeScript type checking
-npm run db:push      # Push database schema changes
-npm run db:studio    # Open Drizzle Studio (DB GUI)
-npm test             # Run tests
+# Development
+npm run dev                              # Start Express + React
+docker-compose up -d                     # Start all services
+docker-compose -f docker-compose.yml \
+  -f docker-compose.dev.yml up           # Dev mode with hot reload
+
+# Database
+npm run db:push                          # Push schema changes
+npm run db:studio                        # Open Drizzle Studio
+
+# Testing
+npm test                                 # Run JS tests
+cd ai-backend && pytest                  # Run Python tests
+
+# Type checking
+npm run check                            # TypeScript
+cd ai-backend && mypy src                # Python
 ```
 
 ### Helpful Documentation
@@ -586,8 +550,8 @@ npm test             # Run tests
 - `docs/DEVELOPMENT.md` - Dev guidelines
 - `docs/IMPLEMENTATION_AUDIT.md` - Current state
 - `docs/API.md` - API reference
+- `docs/BILLING_AND_LIMITS.md` - Pricing and limits
 - `docs/WIDGET_API_README.md` - Widget API docs
-- `docs/MULTI_TENANT_SCHEMA_PLAN.md` - Data model
 
 ---
 
